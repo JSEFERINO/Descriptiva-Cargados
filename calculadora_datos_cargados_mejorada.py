@@ -1562,16 +1562,31 @@ def mostrar_analisis_rendimiento(df):
             col_docente = posible_col
             break
 
+    # Información del docente para las etiquetas de las barras.
+    # Si la variable docente ya forma parte de las claves de agrupación,
+    # no se debe volver a agregar ni hacer reset_index(): produciría nombres duplicados.
     if col_docente:
-        docentes_por_grupo = df_filtrado.groupby(agrupar_por)[col_docente].apply(
-            lambda x: ', '.join(x.dropna().astype(str).unique())
-        ).reset_index()
-        tabla_pivot = tabla_pivot.merge(docentes_por_grupo, on=agrupar_por, how='left')
+        if col_docente in agrupar_por:
+            # El docente ya identifica cada grupo.
+            tabla_pivot['Docente_Info'] = tabla_pivot[col_docente].astype(str)
+        else:
+            docentes_por_grupo = (
+                df_filtrado.groupby(agrupar_por, dropna=False)[col_docente]
+                .agg(lambda x: ', '.join(pd.unique(x.dropna().astype(str))))
+                .reset_index(name='Docente_Info')
+            )
+            tabla_pivot = tabla_pivot.merge(
+                docentes_por_grupo,
+                on=agrupar_por,
+                how='left',
+                validate='many_to_one'
+            )
+            tabla_pivot['Docente_Info'] = tabla_pivot['Docente_Info'].fillna('No disponible')
     else:
         tabla_pivot['Docente_Info'] = 'No disponible'
 
-    # Agregamos la columna Docente al texto del gráfico
-    col_texto = col_docente if col_docente else 'Docente_Info'
+    # Se utiliza una columna auxiliar estable para el texto de los gráficos.
+    col_texto = 'Docente_Info'
     if estadistico != "Conteo":
         tabla_pivot['Texto_Barra'] = tabla_pivot.apply(
             lambda row: f"{row[var_valor]:.2f}<br><span style='font-size:10px; color:gray;'>{row[col_texto]}</span>", axis=1
@@ -2688,10 +2703,28 @@ def mostrar_analisis_descriptivo(df):
                     "independencia y valores influyentes."
                 )
 
+                # Plotly Express exige que nbins sea un entero; "auto" no es válido.
+                # Se calcula el número de clases con Freedman–Diaconis y se limita
+                # para evitar histogramas excesivamente fragmentados.
+                x_hist_inf = np.asarray(x_inf, dtype=float)
+                x_hist_inf = x_hist_inf[np.isfinite(x_hist_inf)]
+                n_hist_inf = len(x_hist_inf)
+                if n_hist_inf >= 2 and np.ptp(x_hist_inf) > 0:
+                    q1_hist, q3_hist = np.percentile(x_hist_inf, [25, 75])
+                    iqr_hist = q3_hist - q1_hist
+                    ancho_fd = 2 * iqr_hist / (n_hist_inf ** (1 / 3))
+                    if ancho_fd > 0:
+                        bins_inf = int(np.ceil(np.ptp(x_hist_inf) / ancho_fd))
+                    else:
+                        bins_inf = int(np.ceil(np.log2(n_hist_inf) + 1))
+                    bins_inf = max(5, min(60, bins_inf))
+                else:
+                    bins_inf = 5
+
                 colg1, colg2 = st.columns(2)
                 with colg1:
                     fig_hist_inf = px.histogram(
-                        x=x_inf, nbins="auto", marginal="box",
+                        x=x_hist_inf, nbins=bins_inf, marginal="box",
                         title=f"Distribución de {var_inf}",
                         labels={"x": var_inf, "y": "Frecuencia"}
                     )
